@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>登录 - 记账本</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    body { display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+    .login-wrap { width: 100%; max-width: 400px; padding: 16px; }
+    .login-logo { text-align: center; margin-bottom: 32px; }
+    .login-logo .icon { font-size: 3rem; }
+    .login-logo h1 { font-size: 1.6rem; font-weight: 700; margin-top: 8px; }
+    .login-logo p { color: var(--text2); font-size: .9rem; margin-top: 4px; }
+    .login-card { padding: 32px; }
+    .error-msg { background: #fee2e2; color: #991b1b; padding: 10px 14px;
+      border-radius: var(--radius-sm); font-size: .88rem; margin-bottom: 16px; display: none; }
+    [data-theme="dark"] .error-msg { background: #450a0a; color: #fca5a5; }
+    .login-footer { text-align: center; margin-top: 20px; font-size: .85rem; color: var(--text2); }
+    .theme-float { position: fixed; top: 16px; right: 16px; }
+  </style>
+</head>
+<body>
+  <button class="theme-btn theme-float" id="themeBtn" onclick="toggleTheme()">🌙</button>
+  <div class="login-wrap">
+    <div class="login-logo">
+      <div class="icon">💰</div>
+      <h1>多账户记账本</h1>
+      <p>请使用管理员分配的账号登录</p>
+    </div>
+    <div class="card login-card">
+      <div class="error-msg" id="errMsg"></div>
+      <form id="loginForm">
+        <div class="form-group">
+          <label class="form-label">用户名</label>
+          <input type="text" class="form-control" id="username" placeholder="请输入用户名" autocomplete="username" required />
+        </div>
+        <div class="form-group">
+          <label class="form-label">密码</label>
+          <input type="password" class="form-control" id="password" placeholder="请输入密码" autocomplete="current-password" required />
+        </div>
+        <button type="submit" class="btn btn-primary w-full" id="loginBtn" style="margin-top:8px;">
+          登录
+        </button>
+      </form>
+    </div>
+    <div class="login-footer">默认管理员: admin / admin123</div>
+  </div>
+
+  <script src="/utils.js"></script>
+  <script>
+    // 已登录则验证 token 有效性再跳转
+    (async () => {
+      if (getToken()) {
+        try {
+          await apiFetch('/auth/me', { silent: true });
+          location.href = '/dashboard.html';
+        } catch {
+          clearAuth(); // token 无效，清掉重新登录
+        }
+      }
+    })();
+
+    // 初始化主题按钮图标
+    document.getElementById('themeBtn').textContent =
+      (localStorage.getItem('theme') || 'light') === 'dark' ? '☀️' : '🌙';
+
+    document.getElementById('loginForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('loginBtn');
+      const errMsg = document.getElementById('errMsg');
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+
+      btn.disabled = true;
+      btn.textContent = '登录中...';
+      errMsg.style.display = 'none';
+
+      try {
+        const data = await apiFetch('/auth/login', {
+          method: 'POST',
+          body: JSON.stringify({ username, password })
+        });
+        setAuth(data.access_token, data.user);
+        location.href = '/dashboard.html';
+      } catch (err) {
+        errMsg.textContent = err.message;
+        errMsg.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '登录';
+      }
+    });
+  </script>
+</body>
+</html>

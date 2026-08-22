@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>流水记录 - 记账本</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="nav" id="navbar"></header>
+
+  <main class="page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">📋 流水记录</div>
+        <div class="page-subtitle">查看所有资金流水记录</div>
+      </div>
+      <a href="/new-transaction.html" class="btn btn-primary">＋ 新建流水</a>
+    </div>
+
+    <!-- 过滤条 -->
+    <div class="card" style="margin-bottom:20px; padding:16px">
+      <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end">
+        <div>
+          <label class="form-label">账户</label>
+          <select class="form-control" id="filterAccount" style="min-width:140px" onchange="loadTxs()">
+            <option value="">全部账户</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">类型</label>
+          <select class="form-control" id="filterType" onchange="loadTxs()">
+            <option value="">全部类型</option>
+            <option value="spend">支出</option>
+            <option value="deposit">流入</option>
+            <option value="transfer_out">转出</option>
+            <option value="transfer_in">转入</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label">状态</label>
+          <select class="form-control" id="filterStatus" onchange="loadTxs()">
+            <option value="">全部状态</option>
+            <option value="pending">待审批</option>
+            <option value="in_progress">审批中</option>
+            <option value="approved">已通过</option>
+            <option value="rejected">已拒绝</option>
+          </select>
+        </div>
+        <button class="btn btn-ghost" onclick="resetFilters()">重置</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <div id="txTableWrap">
+        <div class="loading"><div class="spinner"></div>加载中...</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 流水详情弹窗 -->
+  <div class="modal-overlay hidden" id="txDetailModal">
+    <div class="modal" style="max-width:560px">
+      <div class="modal-header">
+        <span class="modal-title">流水详情</span>
+        <button class="modal-close" onclick="document.getElementById('txDetailModal').classList.add('hidden')">✕</button>
+      </div>
+      <div id="txDetailContent"></div>
+    </div>
+  </div>
+
+  <script src="/utils.js"></script>
+  <script>
+    requireAuth();
+    let accounts = [];
+
+    async function init() {
+      try {
+        accounts = await apiFetch('/accounts');
+        const sel = document.getElementById('filterAccount');
+        accounts.forEach(a => {
+          const opt = document.createElement('option');
+          opt.value = a.id;
+          opt.textContent = a.name;
+          sel.appendChild(opt);
+        });
+      } catch {}
+      await loadTxs();
+    }
+
+    async function loadTxs() {
+      const wrap = document.getElementById('txTableWrap');
+      wrap.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
+      const params = new URLSearchParams();
+      const accId = document.getElementById('filterAccount').value;
+      const type = document.getElementById('filterType').value;
+      const status = document.getElementById('filterStatus').value;
+      if (accId) params.append('account_id', accId);
+      if (type) params.append('tx_type', type);
+      if (status) params.append('tx_status', status);
+      try {
+        const txs = await apiFetch(`/transactions?${params}`);
+        renderTable(txs);
+      } catch (err) {
+        toast(err.message, 'error');
+        wrap.innerHTML = '<div class="empty"><div class="empty-icon">⚠️</div><p>加载失败</p></div>';
+      }
+    }
+
+    function renderTable(txs) {
+      const wrap = document.getElementById('txTableWrap');
+      if (!txs.length) {
+        wrap.innerHTML = '<div class="empty"><div class="empty-icon">📋</div><p>暂无流水记录</p></div>';
+        return;
+      }
+      wrap.innerHTML = `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th><th>账户</th><th>类型</th>
+                <th>金额</th><th data-hide-mobile>备注</th><th>状态</th>
+                <th data-hide-mobile>提交人</th><th data-hide-mobile>时间</th><th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${txs.map(t => `
+                <tr>
+                  <td class="text-muted text-sm">#${t.id}</td>
+                  <td><span class="tag">${t.account_name}</span></td>
+                  <td>${typeBadge(t.type)}</td>
+                  <td>${amountDisplay(t)}</td>
+                  <td data-hide-mobile class="text-muted" style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${t.note||'-'}</td>
+                  <td>${statusBadge(t.status)}</td>
+                  <td data-hide-mobile>${t.creator_name}</td>
+                  <td data-hide-mobile class="text-muted text-sm">${fmtDateShort(t.created_at)}</td>
+                  <td><button class="btn btn-ghost btn-sm" onclick="showDetail(${t.id})">详情</button></td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    async function showDetail(id) {
+      const modal = document.getElementById('txDetailModal');
+      const content = document.getElementById('txDetailContent');
+      content.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
+      modal.classList.remove('hidden');
+      try {
+        const t = await apiFetch(`/transactions/${id}`);
+        content.innerHTML = `
+          <div class="grid grid-2" style="gap:12px;margin-bottom:16px">
+            <div><span class="text-muted text-sm">账户</span><br><strong>${t.account_name}</strong></div>
+            <div><span class="text-muted text-sm">类型</span><br>${typeBadge(t.type)}</div>
+            <div><span class="text-muted text-sm">金额</span><br>${amountDisplay(t)}</div>
+            <div><span class="text-muted text-sm">状态</span><br>${statusBadge(t.status)}</div>
+            <div><span class="text-muted text-sm">提交人</span><br>${t.creator_name}</div>
+            <div><span class="text-muted text-sm">提交时间</span><br>${fmtDate(t.created_at)}</div>
+          </div>
+          <div style="margin-bottom:16px">
+            <span class="text-muted text-sm">备注</span><br>
+            <p style="margin-top:4px">${t.note || '无备注'}</p>
+          </div>
+          ${t.related_transaction_id ? `<div class="text-muted text-sm" style="margin-bottom:16px">关联流水: #${t.related_transaction_id}</div>` : ''}
+          <hr class="divider">
+          <div class="card-title" style="margin-bottom:12px">审批记录</div>
+          ${t.approval_records.length ? t.approval_records.map(r => `
+            <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:12px;padding:10px;background:var(--surface2);border-radius:var(--radius-sm)">
+              <div style="width:24px;height:24px;background:${r.action==='approved'?'var(--success)':'var(--danger)'};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0">${r.step+1}</div>
+              <div>
+                <div style="font-weight:500">${r.approver_name} · <span style="color:${r.action==='approved'?'var(--success)':'var(--danger)'}">${r.action==='approved'?'✓ 通过':'✗ 拒绝'}</span></div>
+                ${r.comment ? `<div class="text-muted text-sm">${r.comment}</div>` : ''}
+                <div class="text-muted text-sm">${fmtDate(r.acted_at)}</div>
+              </div>
+            </div>
+          `).join('') : '<p class="text-muted">暂无审批记录</p>'}
+        `;
+      } catch (err) {
+        content.innerHTML = `<p class="text-muted">加载失败: ${err.message}</p>`;
+      }
+    }
+
+    function resetFilters() {
+      document.getElementById('filterAccount').value = '';
+      document.getElementById('filterType').value = '';
+      document.getElementById('filterStatus').value = '';
+      loadTxs();
+    }
+
+    renderNav('transactions').then(() => init());
+  </script>
+</body>
+</html>

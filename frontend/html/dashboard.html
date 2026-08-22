@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>仪表盘 - 记账本</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <header class="nav" id="navbar"></header>
+
+  <main class="page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">仪表盘</div>
+        <div class="page-subtitle">资金总览与近期动态</div>
+      </div>
+      <a href="/new-transaction.html" class="btn btn-primary">＋ 新建流水</a>
+    </div>
+
+    <div id="statsGrid" class="grid grid-4" style="margin-bottom:20px;">
+      <div class="card stat-card" style="border-top:3px solid var(--primary)">
+        <div class="stat-value" id="statBalance">--</div>
+        <div class="stat-label">总余额</div>
+      </div>
+      <div class="card stat-card" style="border-top:3px solid var(--info)">
+        <div class="stat-value" id="statAccounts">--</div>
+        <div class="stat-label">账户数</div>
+      </div>
+      <div class="card stat-card" style="border-top:3px solid var(--warning)">
+        <div class="stat-value" id="statPending">--</div>
+        <div class="stat-label">待我审批</div>
+      </div>
+      <div class="card stat-card" style="border-top:3px solid var(--success)">
+        <div class="stat-value" id="statToday">--</div>
+        <div class="stat-label">今日流水</div>
+      </div>
+    </div>
+
+    <div class="grid grid-2">
+      <!-- 账户余额卡片 -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">🏦 账户余额</span>
+          <a href="/accounts.html" class="btn btn-ghost btn-sm">管理账户</a>
+        </div>
+        <div id="accountsList">
+          <div class="loading"><div class="spinner"></div>加载中...</div>
+        </div>
+      </div>
+
+      <!-- 近期流水 -->
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title">📋 近期流水</span>
+          <a href="/transactions.html" class="btn btn-ghost btn-sm">查看全部</a>
+        </div>
+        <div id="recentTxs">
+          <div class="loading"><div class="spinner"></div>加载中...</div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/utils.js"></script>
+  <script>
+    const user = requireAuth();
+    if (!user) throw new Error('not auth');
+
+    async function loadDashboard() {
+      try {
+        const data = await apiFetch('/dashboard');
+
+        document.getElementById('statBalance').textContent = fmtMoney(data.total_balance);
+        document.getElementById('statAccounts').textContent = data.account_count;
+        document.getElementById('statPending').textContent = data.pending_approval_count;
+
+        // 今日流水条数
+        const today = new Date().toLocaleDateString('zh-CN');
+        const todayCount = data.recent_transactions.filter(t =>
+          new Date(t.created_at).toLocaleDateString('zh-CN') === today
+        ).length;
+        document.getElementById('statToday').textContent = todayCount;
+
+        // 账户余额列表
+        const accEl = document.getElementById('accountsList');
+        if (data.accounts.length === 0) {
+          accEl.innerHTML = '<div class="empty"><div class="empty-icon">🏦</div><p>暂无账户</p></div>';
+        } else {
+          accEl.innerHTML = data.accounts.map(a => `
+            <div class="flex-between" style="padding:10px 0; border-bottom:1px solid var(--border)">
+              <div>
+                <div style="font-weight:500">${a.name}</div>
+              </div>
+              <div style="font-weight:700; font-size:1.1rem; color:var(--primary)">${fmtMoney(a.balance)}</div>
+            </div>
+          `).join('');
+        }
+
+        // 近期流水
+        const txEl = document.getElementById('recentTxs');
+        if (data.recent_transactions.length === 0) {
+          txEl.innerHTML = '<div class="empty"><div class="empty-icon">📋</div><p>暂无流水记录</p></div>';
+        } else {
+          txEl.innerHTML = data.recent_transactions.map(t => `
+            <div class="flex-between" style="padding:8px 0; border-bottom:1px solid var(--border)">
+              <div>
+                <div class="flex" style="gap:6px; margin-bottom:2px">
+                  ${typeBadge(t.type)}
+                  <span style="font-size:.85rem">${t.account_name}</span>
+                </div>
+                <div class="text-muted text-sm">${t.note || '无备注'} · ${fmtDateShort(t.created_at)}</div>
+              </div>
+              <div>${amountDisplay(t)}</div>
+            </div>
+          `).join('');
+        }
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    renderNav('dashboard').then(() => loadDashboard());
+  </script>
+</body>
+</html>

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>新建流水 - 记账本</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .type-selector { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 4px; }
+    .type-option {
+      padding: 14px; border-radius: var(--radius-sm); border: 2px solid var(--border);
+      cursor: pointer; text-align: center; transition: all var(--transition);
+      background: var(--surface);
+    }
+    .type-option:hover { border-color: var(--primary); }
+    .type-option.selected { border-color: var(--primary); background: var(--primary)11; }
+    .type-option .icon { font-size: 1.6rem; margin-bottom: 6px; }
+    .type-option .label { font-size: .85rem; font-weight: 600; }
+    .type-option .desc { font-size: .75rem; color: var(--text2); margin-top: 2px; }
+    .form-center { max-width: 560px; margin: 0 auto; }
+  </style>
+</head>
+<body>
+  <header class="nav" id="navbar"></header>
+
+  <main class="page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">＋ 新建流水</div>
+        <div class="page-subtitle">记录一笔资金的收入、支出或转账</div>
+      </div>
+      <a href="/transactions.html" class="btn btn-ghost">返回列表</a>
+    </div>
+
+    <div class="form-center">
+      <div class="card">
+        <form id="txForm">
+
+          <!-- 类型选择 -->
+          <div class="form-group">
+            <label class="form-label">流水类型 *</label>
+            <div class="type-selector">
+              <div class="type-option selected" onclick="selectType('spend')">
+                <div class="icon">💸</div>
+                <div class="label">支出</div>
+                <div class="desc">资金流出账户</div>
+              </div>
+              <div class="type-option" onclick="selectType('deposit')">
+                <div class="icon">💰</div>
+                <div class="label">流入</div>
+                <div class="desc">资金进入账户</div>
+              </div>
+              <div class="type-option" onclick="selectType('transfer')">
+                <div class="icon">🔄</div>
+                <div class="label">转账</div>
+                <div class="desc">账户间资金转移</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 账户选择 -->
+          <div class="form-group">
+            <label class="form-label" id="accountLabel">账户 *</label>
+            <select class="form-control" id="fAccount" required>
+              <option value="">加载中...</option>
+            </select>
+          </div>
+
+          <!-- 目标账户（转账时显示） -->
+          <div class="form-group" id="targetAccountGroup" style="display:none">
+            <label class="form-label">转入账户 *</label>
+            <select class="form-control" id="fTargetAccount">
+              <option value="">选择目标账户...</option>
+            </select>
+          </div>
+
+          <!-- 金额 -->
+          <div class="form-group">
+            <label class="form-label">金额 (¥) *</label>
+            <input type="number" class="form-control" id="fAmount" min="0.01" step="0.01" placeholder="请输入金额" required />
+          </div>
+
+          <!-- 备注 -->
+          <div class="form-group">
+            <label class="form-label">备注</label>
+            <textarea class="form-control" id="fNote" placeholder="可选，填写备注说明"></textarea>
+          </div>
+
+          <!-- 提示信息 -->
+          <div id="permTip" style="padding:10px 14px;border-radius:var(--radius-sm);font-size:.85rem;margin-bottom:16px;display:none"></div>
+
+          <div style="display:flex;gap:12px;justify-content:flex-end">
+            <a href="/transactions.html" class="btn btn-ghost">取消</a>
+            <button type="submit" class="btn btn-primary" id="submitBtn">提交流水</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- 审批链预览 -->
+      <div class="card" style="margin-top:16px" id="chainPreviewCard" style="display:none">
+        <div class="card-title" style="margin-bottom:12px">📋 审批流程预览</div>
+        <div id="chainPreview"></div>
+      </div>
+    </div>
+  </main>
+
+  <script src="/utils.js"></script>
+  <script>
+    const user = requireAuth();
+    let accounts = [];
+    let selectedType = 'spend';
+
+    async function init() {
+      try {
+        accounts = await apiFetch('/accounts');
+        populateAccounts();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    function populateAccounts() {
+      const sel = document.getElementById('fAccount');
+      const targetSel = document.getElementById('fTargetAccount');
+      sel.innerHTML = '<option value="">选择账户...</option>';
+      targetSel.innerHTML = '<option value="">选择目标账户...</option>';
+
+      // 根据类型过滤有权限的账户
+      accounts.forEach(a => {
+        const perm = a.permissions.find(p => p.user_id === user.id);
+        const isAdmin = user.is_admin;
+        let canUse = false;
+        if (selectedType === 'spend') canUse = isAdmin || (perm && perm.can_spend);
+        else if (selectedType === 'deposit') canUse = isAdmin || (perm && perm.can_deposit);
+        else if (selectedType === 'transfer') canUse = isAdmin || (perm && perm.can_transfer);
+
+        const opt = document.createElement('option');
+        opt.value = a.id;
+        opt.textContent = `${a.name} (${fmtMoney(a.balance)})`;
+        if (!canUse) { opt.textContent += ' [无权限]'; opt.disabled = true; }
+        sel.appendChild(opt.cloneNode(true));
+
+        // 目标账户不限权限
+        const opt2 = document.createElement('option');
+        opt2.value = a.id;
+        opt2.textContent = `${a.name} (${fmtMoney(a.balance)})`;
+        targetSel.appendChild(opt2);
+      });
+
+      sel.addEventListener('change', updateChainPreview);
+    }
+
+    function selectType(type) {
+      selectedType = type;
+      document.querySelectorAll('.type-option').forEach((el, i) => {
+        el.classList.toggle('selected', ['spend','deposit','transfer'][i] === type);
+      });
+      // 转账时显示目标账户
+      document.getElementById('targetAccountGroup').style.display = type === 'transfer' ? '' : 'none';
+      document.getElementById('accountLabel').textContent = type === 'transfer' ? '转出账户 *' : '账户 *';
+      populateAccounts();
+      updateChainPreview();
+    }
+
+    function updateChainPreview() {
+      const accountId = parseInt(document.getElementById('fAccount').value);
+      const a = accounts.find(x => x.id === accountId);
+      const card = document.getElementById('chainPreviewCard');
+      const preview = document.getElementById('chainPreview');
+
+      if (!a) { card.style.display = 'none'; return; }
+      card.style.display = '';
+
+      const chain = a.approval_chain;
+      if (!chain.length) {
+        preview.innerHTML = '<p class="text-muted">⚡ 该账户无审批链，提交后直接生效</p>';
+        return;
+      }
+      preview.innerHTML = `
+        <p class="text-muted text-sm" style="margin-bottom:12px">共 ${chain.length} 级审批，需依次通过所有审批人才会生效</p>
+        <div>${chain.map((uid, i) => `
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="background:var(--primary);color:#fff;border-radius:50%;width:26px;height:26px;display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0">第${i+1}级</span>
+            <span>用户 ID: ${uid}</span>
+          </div>
+          ${i < chain.length-1 ? '<div style="margin-left:13px;color:var(--text2)">↓</div>' : ''}
+        `).join('')}</div>
+      `;
+    }
+
+    document.getElementById('txForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const btn = document.getElementById('submitBtn');
+      const accountId = parseInt(document.getElementById('fAccount').value);
+      const amount = parseFloat(document.getElementById('fAmount').value);
+      const note = document.getElementById('fNote').value.trim();
+
+      if (!accountId) { toast('请选择账户', 'error'); return; }
+      if (!amount || amount <= 0) { toast('请输入有效金额', 'error'); return; }
+
+      let type = selectedType;
+      let targetAccountId = null;
+      if (type === 'transfer') {
+        type = 'transfer_out';
+        targetAccountId = parseInt(document.getElementById('fTargetAccount').value);
+        if (!targetAccountId) { toast('请选择转入账户', 'error'); return; }
+        if (targetAccountId === accountId) { toast('转出和转入账户不能相同', 'error'); return; }
+      }
+
+      btn.disabled = true;
+      btn.textContent = '提交中...';
+      try {
+        await apiFetch('/transactions', {
+          method: 'POST',
+          body: JSON.stringify({
+            account_id: accountId,
+            amount,
+            type,
+            note,
+            target_account_id: targetAccountId,
+          })
+        });
+        toast('流水已提交！', 'success');
+        setTimeout(() => location.href = '/transactions.html', 800);
+      } catch (err) {
+        toast(err.message, 'error');
+        btn.disabled = false;
+        btn.textContent = '提交流水';
+      }
+    });
+
+    renderNav('transactions').then(() => init());
+  </script>
+</body>
+</html>

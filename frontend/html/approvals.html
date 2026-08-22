@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>审批中心 - 记账本</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .tabs { display: flex; gap: 4px; margin-bottom: 20px; border-bottom: 1px solid var(--border); }
+    .tab-btn { padding: 8px 18px; border-radius: var(--radius-sm) var(--radius-sm) 0 0; border: none;
+      background: none; cursor: pointer; font-size: .9rem; color: var(--text2);
+      border-bottom: 2px solid transparent; transition: all var(--transition); margin-bottom: -1px; }
+    .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); background: var(--surface2); }
+    .approval-item {
+      padding: 16px; border-radius: var(--radius-sm); border: 1px solid var(--border);
+      margin-bottom: 12px; background: var(--surface2); transition: all var(--transition);
+    }
+    .approval-item:hover { border-color: var(--primary); }
+  </style>
+</head>
+<body>
+  <header class="nav" id="navbar"></header>
+
+  <main class="page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">✅ 审批中心</div>
+        <div class="page-subtitle">处理待审批流水，查看审批历史</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('pending')" id="tabPending">
+          待我审批 <span id="pendingBadge" style="background:var(--danger);color:#fff;border-radius:10px;padding:1px 7px;font-size:.75rem;margin-left:4px"></span>
+        </button>
+        <button class="tab-btn" onclick="switchTab('all')" id="tabAll">全部记录</button>
+      </div>
+
+      <div id="pendingContent">
+        <div class="loading"><div class="spinner"></div>加载中...</div>
+      </div>
+      <div id="allContent" style="display:none">
+        <div class="loading"><div class="spinner"></div>加载中...</div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 审批操作弹窗 -->
+  <div class="modal-overlay hidden" id="approvalModal">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title" id="approvalModalTitle">审批操作</span>
+        <button class="modal-close" onclick="closeApprovalModal()">✕</button>
+      </div>
+      <div id="approvalModalTxInfo" style="margin-bottom:16px"></div>
+      <div class="form-group">
+        <label class="form-label">审批意见（可选）</label>
+        <textarea class="form-control" id="approvalComment" placeholder="填写审批意见..."></textarea>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-ghost" onclick="closeApprovalModal()">取消</button>
+        <button class="btn btn-danger" onclick="doApproval('rejected')" id="btnReject">✗ 拒绝</button>
+        <button class="btn btn-success" onclick="doApproval('approved')" id="btnApprove">✓ 通过</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/utils.js"></script>
+  <script>
+    requireAuth();
+    let currentTxId = null;
+
+    async function switchTab(tab) {
+      document.getElementById('tabPending').classList.toggle('active', tab === 'pending');
+      document.getElementById('tabAll').classList.toggle('active', tab === 'all');
+      document.getElementById('pendingContent').style.display = tab === 'pending' ? '' : 'none';
+      document.getElementById('allContent').style.display = tab === 'all' ? '' : 'none';
+      if (tab === 'pending') await loadPending();
+      else await loadAll();
+    }
+
+    async function loadPending() {
+      const el = document.getElementById('pendingContent');
+      el.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
+      try {
+        const txs = await apiFetch('/approvals/pending');
+        document.getElementById('pendingBadge').textContent = txs.length || '';
+        if (!txs.length) {
+          el.innerHTML = '<div class="empty"><div class="empty-icon">🎉</div><p>没有待审批的流水</p></div>';
+          return;
+        }
+        el.innerHTML = txs.map(t => renderApprovalItem(t, true)).join('');
+      } catch (err) {
+        el.innerHTML = `<p class="text-muted">加载失败: ${err.message}</p>`;
+      }
+    }
+
+    async function loadAll() {
+      const el = document.getElementById('allContent');
+      el.innerHTML = '<div class="loading"><div class="spinner"></div>加载中...</div>';
+      try {
+        const txs = await apiFetch('/approvals/all');
+        if (!txs.length) {
+          el.innerHTML = '<div class="empty"><div class="empty-icon">📋</div><p>暂无审批记录</p></div>';
+          return;
+        }
+        el.innerHTML = `
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr><th>账户</th><th>类型</th><th>金额</th><th>备注</th><th>状态</th><th>提交人</th><th>时间</th><th>操作</th></tr>
+              </thead>
+              <tbody>
+                ${txs.map(t => `
+                  <tr>
+                    <td><span class="tag">${t.account_name}</span></td>
+                    <td>${typeBadge(t.type)}</td>
+                    <td>${amountDisplay(t)}</td>
+                    <td class="text-muted">${t.note||'-'}</td>
+                    <td>${statusBadge(t.status)}</td>
+                    <td>${t.creator_name}</td>
+                    <td class="text-muted text-sm">${fmtDateShort(t.created_at)}</td>
+                    <td><button class="btn btn-ghost btn-sm" onclick="showTxDetail(${t.id})">详情</button></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      } catch (err) {
+        el.innerHTML = `<p class="text-muted">加载失败: ${err.message}</p>`;
+      }
+    }
+
+    function renderApprovalItem(t, showActions) {
+      return `
+        <div class="approval-item">
+          <div class="flex-between" style="margin-bottom:10px">
+            <div class="flex" style="gap:8px">
+              ${typeBadge(t.type)}
+              <span class="font-bold">${t.account_name}</span>
+              <span class="tag text-sm">#${t.id}</span>
+            </div>
+            <div>${statusBadge(t.status)}</div>
+          </div>
+          <div class="grid grid-3" style="gap:8px;margin-bottom:10px">
+            <div><span class="text-muted text-sm">金额</span><br>${amountDisplay(t)}</div>
+            <div><span class="text-muted text-sm">提交人</span><br>${t.creator_name}</div>
+            <div><span class="text-muted text-sm">提交时间</span><br><span class="text-sm">${fmtDateShort(t.created_at)}</span></div>
+          </div>
+          ${t.note ? `<div class="text-muted text-sm" style="margin-bottom:10px">备注: ${t.note}</div>` : ''}
+          ${t.approval_records.length ? `
+            <div style="margin-bottom:10px">
+              <span class="text-muted text-sm">审批进度: </span>
+              ${t.approval_records.map(r => `
+                <span style="display:inline-flex;align-items:center;gap:4px;margin-right:8px">
+                  <span style="color:${r.action==='approved'?'var(--success)':'var(--danger)'}">${r.action==='approved'?'✓':'✗'}</span>
+                  <span class="text-sm">${r.approver_name}</span>
+                </span>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${showActions ? `
+            <div class="flex" style="gap:8px;justify-content:flex-end">
+              <button class="btn btn-ghost btn-sm" onclick="showTxDetail(${t.id})">查看详情</button>
+              <button class="btn btn-danger btn-sm" onclick="openApprovalModal(${t.id}, '${t.account_name}', '${t.type}', ${t.amount}, 'rejected')">✗ 拒绝</button>
+              <button class="btn btn-success btn-sm" onclick="openApprovalModal(${t.id}, '${t.account_name}', '${t.type}', ${t.amount}, 'approved')">✓ 通过</button>
+            </div>
+          ` : `<div class="flex" style="justify-content:flex-end"><button class="btn btn-ghost btn-sm" onclick="showTxDetail(${t.id})">查看详情</button></div>`}
+        </div>
+      `;
+    }
+
+    let detailModal = null;
+    async function showTxDetail(id) {
+      // 复用 transactions 页面的详情展示，直接跳转
+      const txs = await apiFetch(`/transactions/${id}`);
+      const overlay = document.createElement('div');
+      overlay.className = 'modal-overlay';
+      overlay.innerHTML = `
+        <div class="modal" style="max-width:560px">
+          <div class="modal-header">
+            <span class="modal-title">流水详情 #${id}</span>
+            <button class="modal-close" onclick="this.closest('.modal-overlay').remove()">✕</button>
+          </div>
+          <div class="grid grid-2" style="gap:12px;margin-bottom:16px">
+            <div><span class="text-muted text-sm">账户</span><br><strong>${txs.account_name}</strong></div>
+            <div><span class="text-muted text-sm">类型</span><br>${typeBadge(txs.type)}</div>
+            <div><span class="text-muted text-sm">金额</span><br>${amountDisplay(txs)}</div>
+            <div><span class="text-muted text-sm">状态</span><br>${statusBadge(txs.status)}</div>
+            <div><span class="text-muted text-sm">提交人</span><br>${txs.creator_name}</div>
+            <div><span class="text-muted text-sm">时间</span><br>${fmtDate(txs.created_at)}</div>
+          </div>
+          <div style="margin-bottom:16px"><span class="text-muted text-sm">备注</span><br>${txs.note||'无备注'}</div>
+          <hr class="divider">
+          <div class="card-title" style="margin-bottom:12px">审批记录</div>
+          ${txs.approval_records.length ? txs.approval_records.map(r => `
+            <div style="display:flex;gap:12px;align-items:flex-start;margin-bottom:12px;padding:10px;background:var(--surface2);border-radius:var(--radius-sm)">
+              <div style="width:24px;height:24px;background:${r.action==='approved'?'var(--success)':'var(--danger)'};color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:.8rem;flex-shrink:0">${r.step+1}</div>
+              <div>
+                <div style="font-weight:500">${r.approver_name} · <span style="color:${r.action==='approved'?'var(--success)':'var(--danger)'}">${r.action==='approved'?'✓ 通过':'✗ 拒绝'}</span></div>
+                ${r.comment ? `<div class="text-muted text-sm">${r.comment}</div>` : ''}
+                <div class="text-muted text-sm">${fmtDate(r.acted_at)}</div>
+              </div>
+            </div>
+          `).join('') : '<p class="text-muted">暂无审批记录</p>'}
+        </div>
+      `;
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
+      document.body.appendChild(overlay);
+    }
+
+    function openApprovalModal(txId, accountName, type, amount, defaultAction) {
+      currentTxId = txId;
+      document.getElementById('approvalModalTitle').textContent = `审批操作 - #${txId}`;
+      document.getElementById('approvalModalTxInfo').innerHTML = `
+        <div class="approval-item" style="margin:0">
+          <div class="flex" style="gap:8px;margin-bottom:6px">${typeBadge(type)}<strong>${accountName}</strong></div>
+          <div class="text-sm">金额: <strong class="${type==='deposit'||type==='transfer_in'?'amount-positive':'amount-negative'}">¥${Number(amount).toFixed(2)}</strong></div>
+        </div>
+      `;
+      document.getElementById('approvalComment').value = '';
+      document.getElementById('approvalModal').classList.remove('hidden');
+    }
+
+    function closeApprovalModal() {
+      document.getElementById('approvalModal').classList.add('hidden');
+      currentTxId = null;
+    }
+
+    async function doApproval(action) {
+      if (!currentTxId) return;
+      const comment = document.getElementById('approvalComment').value.trim();
+      document.getElementById('btnApprove').disabled = true;
+      document.getElementById('btnReject').disabled = true;
+      try {
+        await apiFetch(`/approvals/${currentTxId}/action`, {
+          method: 'POST',
+          body: JSON.stringify({ action, comment })
+        });
+        toast(action === 'approved' ? '✓ 已通过' : '✗ 已拒绝', action === 'approved' ? 'success' : 'error');
+        closeApprovalModal();
+        await loadPending();
+      } catch (err) {
+        toast(err.message, 'error');
+      } finally {
+        document.getElementById('btnApprove').disabled = false;
+        document.getElementById('btnReject').disabled = false;
+      }
+    }
+
+    renderNav('approvals').then(() => loadPending());
+  </script>
+</body>
+</html>

@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>账户管理 - 记账本</title>
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .perm-table th, .perm-table td { text-align: center; padding: 8px 12px; }
+    .perm-table td:first-child { text-align: left; }
+    .chain-item {
+      display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+      background: var(--surface2); border-radius: var(--radius-sm); border: 1px solid var(--border);
+      margin-bottom: 8px;
+    }
+    .chain-arrow { color: var(--text2); font-size: 1.2rem; }
+    .account-card { cursor: pointer; transition: all var(--transition); }
+    .account-card:hover { transform: translateY(-2px); }
+    .account-card.selected { border-color: var(--primary); box-shadow: 0 0 0 2px var(--primary)33; }
+  </style>
+</head>
+<body>
+  <header class="nav" id="navbar"></header>
+
+  <main class="page">
+    <div class="page-header">
+      <div>
+        <div class="page-title">🏦 账户管理</div>
+        <div class="page-subtitle">管理资金账户，配置权限与审批流程</div>
+      </div>
+      <button class="btn btn-primary" id="createBtn" style="display:none" onclick="openCreateModal()">＋ 新建账户</button>
+    </div>
+
+    <div class="grid grid-3" id="accountsGrid">
+      <div class="card" style="grid-column:1/-1">
+        <div class="loading"><div class="spinner"></div>加载中...</div>
+      </div>
+    </div>
+
+    <!-- 账户详情区域 -->
+    <div id="detailArea" style="display:none; margin-top:24px">
+      <div class="card">
+        <div class="card-header">
+          <span class="card-title" id="detailTitle">账户配置</span>
+          <div class="flex" style="gap:8px">
+            <button class="btn btn-ghost btn-sm" onclick="closeDetail()">收起</button>
+          </div>
+        </div>
+        <!-- Tabs -->
+        <div style="display:flex;gap:4px;margin-bottom:20px;border-bottom:1px solid var(--border);padding-bottom:0">
+          <button class="btn btn-ghost btn-sm tab-btn active" onclick="switchTab('perms')" id="tabPerms">权限配置</button>
+          <button class="btn btn-ghost btn-sm tab-btn" onclick="switchTab('chain')" id="tabChain">审批链配置</button>
+        </div>
+        <div id="tabPermsContent"></div>
+        <div id="tabChainContent" style="display:none"></div>
+      </div>
+    </div>
+  </main>
+
+  <!-- 新建账户弹窗 -->
+  <div class="modal-overlay hidden" id="createModal">
+    <div class="modal">
+      <div class="modal-header">
+        <span class="modal-title">新建账户</span>
+        <button class="modal-close" onclick="document.getElementById('createModal').classList.add('hidden')">✕</button>
+      </div>
+      <form id="createForm">
+        <div class="form-group">
+          <label class="form-label">账户名称</label>
+          <input type="text" class="form-control" id="fName" required />
+        </div>
+        <div class="form-group">
+          <label class="form-label">描述</label>
+          <input type="text" class="form-control" id="fDesc" placeholder="可选" />
+        </div>
+        <div class="form-group">
+          <label class="form-label">初始余额 (¥)</label>
+          <input type="number" class="form-control" id="fBalance" value="0" min="0" step="0.01" />
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-ghost" onclick="document.getElementById('createModal').classList.add('hidden')">取消</button>
+          <button type="submit" class="btn btn-primary">创建</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="/utils.js"></script>
+  <script>
+    const user = requireAuth();
+    const isAdmin = user && user.is_admin;
+    let accounts = [];
+    let allUsers = [];
+    let selectedAccountId = null;
+
+    async function loadAll() {
+      if (isAdmin) {
+        document.getElementById('createBtn').style.display = '';
+        try { allUsers = await apiFetch('/admin/users'); } catch {}
+      }
+      try {
+        accounts = await apiFetch('/accounts');
+        renderGrid();
+      } catch (err) {
+        toast(err.message, 'error');
+      }
+    }
+
+    function renderGrid() {
+      const grid = document.getElementById('accountsGrid');
+      if (!accounts.length) {
+        grid.innerHTML = '<div class="card" style="grid-column:1/-1"><div class="empty"><div class="empty-icon">🏦</div><p>暂无账户</p></div></div>';
+        return;
+      }
+      grid.innerHTML = accounts.map(a => `
+        <div class="card account-card ${selectedAccountId===a.id?'selected':''}" onclick="selectAccount(${a.id})" id="ac${a.id}">
+          <div style="font-size:1.5rem;margin-bottom:8px">🏦</div>
+          <div style="font-weight:700;font-size:1.05rem;margin-bottom:4px">${a.name}</div>
+          <div class="text-muted text-sm" style="margin-bottom:12px">${a.description||'暂无描述'}</div>
+          <div style="font-size:1.4rem;font-weight:700;color:var(--primary)">${fmtMoney(a.balance)}</div>
+          <hr class="divider" style="margin:12px 0">
+          <div class="flex text-sm text-muted" style="gap:12px">
+            <span>审批链: ${a.approval_chain.length} 人</span>
+            <span>权限: ${a.permissions.length} 人</span>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function selectAccount(id) {
+      selectedAccountId = id;
+      renderGrid();
+      showDetail(id);
+    }
+
+    function closeDetail() {
+      selectedAccountId = null;
+      renderGrid();
+      document.getElementById('detailArea').style.display = 'none';
+    }
+
+    function showDetail(id) {
+      const a = accounts.find(x => x.id === id);
+      if (!a) return;
+      document.getElementById('detailTitle').textContent = `账户配置 - ${a.name}`;
+      document.getElementById('detailArea').style.display = '';
+      switchTab('perms');
+    }
+
+    function switchTab(tab) {
+      document.getElementById('tabPermsContent').style.display = tab === 'perms' ? '' : 'none';
+      document.getElementById('tabChainContent').style.display = tab === 'chain' ? '' : 'none';
+      document.getElementById('tabPerms').classList.toggle('active', tab === 'perms');
+      document.getElementById('tabChain').classList.toggle('active', tab === 'chain');
+      if (tab === 'perms') renderPerms();
+      else renderChain();
+    }
+
+    function renderPerms() {
+      const a = accounts.find(x => x.id === selectedAccountId);
+      if (!a) return;
+      const el = document.getElementById('tabPermsContent');
+
+      if (!isAdmin) {
+        el.innerHTML = `
+          <p class="text-muted">当前账户权限：</p>
+          <div style="margin-top:12px">
+            ${a.permissions.filter(p => p.user_id === user.id).map(p => `
+              <div class="flex" style="gap:12px;flex-wrap:wrap">
+                ${p.can_view ? '<span class="tag">查看</span>' : ''}
+                ${p.can_deposit ? '<span class="tag">充值</span>' : ''}
+                ${p.can_spend ? '<span class="tag">支出</span>' : ''}
+                ${p.can_transfer ? '<span class="tag">转账</span>' : ''}
+                ${p.can_approve ? '<span class="tag">审批</span>' : ''}
+              </div>
+            `).join('') || '<span class="text-muted">暂无特殊权限</span>'}
+          </div>
+        `;
+        return;
+      }
+
+      // Admin 视图：权限矩阵
+      el.innerHTML = `
+        <div class="table-wrap">
+          <table class="perm-table">
+            <thead>
+              <tr>
+                <th>用户</th>
+                <th>查看</th><th>充值</th><th>支出</th><th>转账</th><th>审批</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="permBody"></tbody>
+          </table>
+        </div>
+        <div style="margin-top:16px">
+          <select class="form-control" id="addUserSel" style="max-width:200px;display:inline-block">
+            <option value="">选择用户添加权限...</option>
+            ${allUsers.map(u => `<option value="${u.id}">${u.display_name} (${u.username})</option>`).join('')}
+          </select>
+          <button class="btn btn-primary btn-sm" style="margin-left:8px" onclick="addPermUser()">添加</button>
+        </div>
+      `;
+      renderPermBody(a);
+    }
+
+    function renderPermBody(a) {
+      const body = document.getElementById('permBody');
+      if (!body) return;
+      const existingUserIds = a.permissions.map(p => p.user_id);
+      if (!existingUserIds.length) {
+        body.innerHTML = '<tr><td colspan="7" class="text-muted" style="text-align:center">暂无权限配置</td></tr>';
+        return;
+      }
+      body.innerHTML = a.permissions.map(p => {
+        const u = allUsers.find(x => x.id === p.user_id);
+        return `
+          <tr>
+            <td>${u ? u.display_name : p.user_id}</td>
+            ${['can_view','can_deposit','can_spend','can_transfer','can_approve'].map(k => `
+              <td>
+                <input type="checkbox" ${p[k]?'checked':''} onchange="savePerm(${a.id},${p.user_id},'${k}',this.checked)" />
+              </td>
+            `).join('')}
+            <td>
+              <button class="btn btn-danger btn-sm" onclick="removePerm(${a.id},${p.user_id})">删除</button>
+            </td>
+          </tr>
+        `;
+      }).join('');
+    }
+
+    let permDebounce = {};
+    async function savePerm(accountId, userId, field, value) {
+      const a = accounts.find(x => x.id === accountId);
+      if (!a) return;
+      const perm = a.permissions.find(p => p.user_id === userId) || {
+        user_id: userId, can_view: false, can_deposit: false,
+        can_spend: false, can_transfer: false, can_approve: false
+      };
+      perm[field] = value;
+      const key = `${accountId}_${userId}`;
+      clearTimeout(permDebounce[key]);
+      permDebounce[key] = setTimeout(async () => {
+        try {
+          await apiFetch(`/accounts/${accountId}/permissions`, { method: 'PUT', body: JSON.stringify(perm) });
+          accounts = await apiFetch('/accounts');
+          toast('权限已保存', 'success');
+        } catch (err) { toast(err.message, 'error'); }
+      }, 600);
+    }
+
+    async function addPermUser() {
+      const sel = document.getElementById('addUserSel');
+      const uid = parseInt(sel.value);
+      if (!uid) return;
+      const a = accounts.find(x => x.id === selectedAccountId);
+      if (!a) return;
+      if (a.permissions.find(p => p.user_id === uid)) { toast('该用户已有权限配置', 'info'); return; }
+      try {
+        await apiFetch(`/accounts/${selectedAccountId}/permissions`, {
+          method: 'PUT',
+          body: JSON.stringify({ user_id: uid, can_view: true, can_deposit: false, can_spend: false, can_transfer: false, can_approve: false })
+        });
+        accounts = await apiFetch('/accounts');
+        renderPerms();
+        toast('已添加', 'success');
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    async function removePerm(accountId, userId) {
+      try {
+        await apiFetch(`/accounts/${accountId}/permissions/${userId}`, { method: 'DELETE' });
+        accounts = await apiFetch('/accounts');
+        renderPerms();
+        toast('已删除', 'success');
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    function renderChain() {
+      const a = accounts.find(x => x.id === selectedAccountId);
+      if (!a) return;
+      const el = document.getElementById('tabChainContent');
+
+      const chainUsers = a.approval_chain.map(uid => allUsers.find(u => u.id === uid)).filter(Boolean);
+
+      if (!isAdmin) {
+        el.innerHTML = chainUsers.length
+          ? `<div>${chainUsers.map((u,i) => `
+              <div class="chain-item">
+                <span style="background:var(--primary);color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:.8rem">${i+1}</span>
+                <span>${u.display_name}</span>
+              </div>
+              ${i < chainUsers.length-1 ? '<div style="text-align:center;color:var(--text2);margin:-4px 0 4px">↓</div>' : ''}
+            `).join('')}</div>`
+          : '<p class="text-muted">该账户无审批链（流水提交后直接生效）</p>';
+        return;
+      }
+
+      el.innerHTML = `
+        <div id="chainList">${renderChainList(a)}</div>
+        <div style="margin-top:16px;display:flex;gap:8px;align-items:center">
+          <select class="form-control" id="chainUserSel" style="max-width:200px">
+            <option value="">选择审批人...</option>
+            ${allUsers.map(u => `<option value="${u.id}">${u.display_name} (${u.username})</option>`).join('')}
+          </select>
+          <button class="btn btn-primary btn-sm" onclick="addChainUser()">添加审批节点</button>
+        </div>
+        <p class="text-muted text-sm mt-4">审批链按顺序流转。若审批链为空，流水提交后直接生效。</p>
+      `;
+    }
+
+    function renderChainList(a) {
+      const chain = a.approval_chain;
+      if (!chain.length) return '<p class="text-muted">暂无审批节点</p>';
+      return chain.map((uid, i) => {
+        const u = allUsers.find(x => x.id === uid);
+        return `
+          <div class="chain-item">
+            <span style="background:var(--primary);color:#fff;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:.8rem">${i+1}</span>
+            <span style="flex:1">${u ? u.display_name : '未知用户'}</span>
+            <button class="btn btn-danger btn-sm" onclick="removeChainStep(${i})">删除</button>
+          </div>
+          ${i < chain.length-1 ? '<div style="text-align:center;color:var(--text2);margin:-2px 0 4px">↓</div>' : ''}
+        `;
+      }).join('');
+    }
+
+    async function addChainUser() {
+      const sel = document.getElementById('chainUserSel');
+      const uid = parseInt(sel.value);
+      if (!uid) return;
+      const a = accounts.find(x => x.id === selectedAccountId);
+      if (!a) return;
+      const newChain = [...a.approval_chain, uid];
+      await saveChain(newChain);
+    }
+
+    async function removeChainStep(idx) {
+      const a = accounts.find(x => x.id === selectedAccountId);
+      if (!a) return;
+      const newChain = a.approval_chain.filter((_, i) => i !== idx);
+      await saveChain(newChain);
+    }
+
+    async function saveChain(chain) {
+      try {
+        await apiFetch(`/accounts/${selectedAccountId}/approval-chain`, {
+          method: 'PUT', body: JSON.stringify({ user_ids: chain })
+        });
+        accounts = await apiFetch('/accounts');
+        const a = accounts.find(x => x.id === selectedAccountId);
+        document.getElementById('chainList').innerHTML = renderChainList(a);
+        toast('审批链已保存', 'success');
+      } catch (err) { toast(err.message, 'error'); }
+    }
+
+    function openCreateModal() {
+      document.getElementById('createModal').classList.remove('hidden');
+    }
+
+    document.getElementById('createForm').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      try {
+        await apiFetch('/accounts', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: document.getElementById('fName').value.trim(),
+            description: document.getElementById('fDesc').value.trim(),
+            initial_balance: parseFloat(document.getElementById('fBalance').value) || 0,
+          })
+        });
+        document.getElementById('createModal').classList.add('hidden');
+        toast('账户已创建', 'success');
+        accounts = await apiFetch('/accounts');
+        renderGrid();
+      } catch (err) { toast(err.message, 'error'); }
+    });
+
+    renderNav('accounts').then(() => loadAll());
+  </script>
+</body>
+</html>

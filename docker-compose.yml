@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  backend:
+    build: ./backend
+    container_name: ledger_backend
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:////app/data/ledger.db
+      - SECRET_KEY=super-secret-key-change-in-production
+    expose:
+      - "8000"
+
+  frontend:
+    build: ./frontend
+    container_name: ledger_frontend
+    restart: unless-stopped
+    ports:
+      - "8093:80"
+    depends_on:
+      - backend
